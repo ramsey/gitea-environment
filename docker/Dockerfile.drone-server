@@ -1,0 +1,5 @@
+FROM drone/drone:1
+
+EXPOSE 8002
+
+ENV DRONE_SERVER_PORT=:8002

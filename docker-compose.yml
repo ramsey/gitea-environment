@@ -1,0 +1,147 @@
+version: '3.7'
+
+networks:
+  gitea:
+
+volumes:
+  composer-home:
+  drone-data:
+  dronedb-data:
+  gitea-data:
+  giteadb-data:
+  minio-config:
+  minio-data:
+
+services:
+
+  gitea:
+    image: gitea/gitea:latest
+    restart: always
+    volumes:
+      - type: volume
+        source: gitea-data
+        target: /data
+    ports:
+      - "3000:3000"
+      - "222:22"
+    depends_on:
+      - giteadb
+    environment:
+      ROOT_URL: "http://gitea:3000"
+      SSH_DOMAIN: "gitea"
+      DB_TYPE: "mysql"
+      DB_HOST: "giteadb:3306"
+      DB_NAME: "gitea"
+      DB_USER: "gitea"
+      DB_PASSWD: "gitea"
+    networks:
+      - gitea
+
+  giteadb:
+    image: mariadb:10
+    restart: always
+    volumes:
+      - type: volume
+        source: giteadb-data
+        target: /var/lib/mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: "gitea"
+      MYSQL_USER: "gitea"
+      MYSQL_PASSWORD: "gitea"
+      MYSQL_DATABASE: "gitea"
+    networks:
+      - gitea
+
+  minio:
+    image: minio/minio:latest
+    restart: always
+    volumes:
+      - type: volume
+        source: minio-config
+        target: /root/.minio
+      - type: volume
+        source: minio-data
+        target: /data
+    ports:
+      - "9000:9000"
+    environment:
+      MINIO_ACCESS_KEY: "minio_access"
+      MINIO_SECRET_KEY: "minio_secret"
+      MINIO_REGION: "us-east-1"
+    entrypoint: sh
+    command: "-c 'mkdir -p /data/drone && /usr/bin/minio server /data'"
+    networks:
+      - gitea
+
+  drone:
+    build:
+      context: ./docker
+      dockerfile: Dockerfile.drone-server
+    restart: always
+    volumes:
+      - type: volume
+        source: drone-data
+        target: /var/lib/drone
+    ports:
+      - "8002:8002"
+    depends_on:
+      - gitea
+      - dronedb
+      - minio
+    environment:
+      DRONE_GIT_AWAYS_AUTH: "false"
+      DRONE_GITEA_SERVER: "http://gitea:3000"
+      DRONE_RPC_SECRET: "10f232c8b0a2585845c907ac2aa8e6ea"
+      DRONE_SERVER_HOST: "drone:8002"
+      DRONE_SERVER_PROTO: "http"
+      DRONE_TLS_AUTOCERT: "false"
+      DRONE_DATABASE_DRIVER: "mysql"
+      DRONE_DATABASE_DATASOURCE: "drone:drone@tcp(dronedb:3306)/drone?parseTime=true"
+      DRONE_DATABASE_SECRET: "c89da4249454d64bbd866038b13cd189"
+      DRONE_AGENTS_ENABLED: "true"
+      DRONE_USER_CREATE: "username:ramsey,admin:true"
+      DRONE_S3_BUCKET: "drone"
+      DRONE_S3_ENDPOINT: "minio:9000"
+      DRONE_S3_SKIP_VERIFY: "false"
+      DRONE_S3_PATH_STYLE: "true"
+      AWS_ACCESS_KEY_ID: "minio_access"
+      AWS_SECRET_ACCESS_KEY: "minio_secret"
+      AWS_DEFAULT_REGION: "us-east-1"
+      AWS_REGION: "us-east-1"
+    networks:
+      - gitea
+
+  dronedb:
+    image: mariadb:10
+    restart: always
+    volumes:
+      - type: volume
+        source: dronedb-data
+        target: /var/lib/mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: "drone"
+      MYSQL_USER: "drone"
+      MYSQL_PASSWORD: "drone"
+      MYSQL_DATABASE: "drone"
+    networks:
+      - gitea
+
+  drone-agent1:
+    image: drone/agent:1
+    restart: always
+    volumes:
+      - type: bind
+        source: /var/run/docker.sock
+        target: /var/run/docker.sock
+    depends_on:
+      - drone
+    environment:
+      DRONE_RPC_SERVER: "http://drone:8002"
+      DRONE_RPC_SECRET: "10f232c8b0a2585845c907ac2aa8e6ea"
+      DRONE_RUNNER_CAPACITY: 2
+      DRONE_RUNNER_NAME: "tinuviel"
+      DRONE_RUNNER_NETWORKS: "gitea_gitea"
+      DRONE_RUNNER_ENVIRON: "COMPOSER_ALLOW_SUPERUSER:1,COMPOSER_HOME:/composer,COMPOSER_NO_INTERACTION:1"
+      DRONE_RUNNER_VOLUMES: "${PWD}/data/composer:/composer"
+    networks:
+      - gitea
